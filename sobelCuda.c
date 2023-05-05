@@ -8,22 +8,54 @@
 #define BLOCK_SIZE 32
 
 _global_ void sobel(int* image, int* edge, int rows, int cols) {
-    int i = blockIdx.y*blockDim.y + threadIdx.y;
-    int j = blockIdx.x*blockDim.x + threadIdx.x;
-    if (i > 0 && i < rows-1 && j > 0 && j < cols-1) {
-        int gx = -1*image[(i-1)*cols+j-1] + image[(i-1)*cols+j+1]
-                 -2*image[i*cols+j-1]     + 2*image[i*cols+j+1]
-                 -1*image[(i+1)*cols+j-1] + image[(i+1)*cols+j+1];
+    _shared_ int tile[BLOCK_SIZE+2][BLOCK_SIZE+2];
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int x = bx*blockDim.x + tx;
+    int y = by*blockDim.y + ty;
 
-        int gy = -1*image[(i-1)*cols+j-1] - 2*image[(i-1)*cols+j] - 1*image[(i-1)*cols+j+1]
-                 + image[(i+1)*cols+j-1]  + 2*image[(i+1)*cols+j]  + 1*image[(i+1)*cols+j+1];
+    // Load tile into shared memory
+    if (x < cols && y < rows) {
+        tile[ty+1][tx+1] = image[y*cols+x];
+        if (tx == 0) {
+            tile[ty+1][tx] = image[y*cols+(x-1)];
+            tile[ty+1][tx+BLOCK_SIZE+1] = image[y*cols+(x+BLOCK_SIZE)];
+        }
+        if (ty == 0) {
+            tile[ty][tx+1] = image[(y-1)*cols+x];
+            tile[ty+BLOCK_SIZE+1][tx+1] = image[(y+BLOCK_SIZE)*cols+x];
+        }
+        if (tx == 0 && ty == 0) {
+            tile[ty][tx] = image[(y-1)*cols+(x-1)];
+            tile[ty][tx+BLOCK_SIZE+1] = image[(y-1)*cols+(x+BLOCK_SIZE)];
+            tile[ty+BLOCK_SIZE+1][tx] = image[(y+BLOCK_SIZE)*cols+(x-1)];
+            tile[ty+BLOCK_SIZE+1][tx+BLOCK_SIZE+1] = image[(y+BLOCK_SIZE)*cols+(x+BLOCK_SIZE)];
+        }
+    }
 
-        int val = (int)sqrt(gx*gx + gy*gy);
+    __syncthreads();
+
+    // Compute edge values for the tile
+    int ex = 0;
+    int ey = 0;
+    if (x >= 1 && x < cols-1 && y >= 1 && y < rows-1) {
+        ex = -1*tile[ty][tx] + tile[ty][tx+2]
+             -2*tile[ty+1][tx] + 2*tile[ty+1][tx+2]
+             -1*tile[ty+2][tx] + tile[ty+2][tx+2];
+
+        ey = -1*tile[ty][tx] - 2*tile[ty][tx+1] - 1*tile[ty][tx+2]
+             + tile[ty+2][tx]  + 2*tile[ty+2][tx+1]  + 1*tile[ty+2][tx+2];
+
+        int val = (int)sqrt(ex*ex + ey*ey);
         if (val > 255) {
             val = 255;
         }
-        edge[i*cols+j] = val;
+        edge[y*cols+x] = val;
     }
+
+    __syncthreads();
 }
 
 int main() {
